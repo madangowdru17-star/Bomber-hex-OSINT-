@@ -1,7 +1,7 @@
 {
   "name": "api-bomber",
   "version": "1.0.0",
-  "description": "150+ API Bomber",
+  "description": "150+ API Bomber - Real-time Count",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
